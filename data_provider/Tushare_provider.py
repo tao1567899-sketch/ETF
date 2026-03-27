@@ -33,7 +33,7 @@ def _with_retry(func, *args, retries=3, delay=5, **kwargs):
     return None
 
 
-class AkShareProvider:
+class TuShareProvider:
     """基于 TuShare 的 ETF 数据提供者（兼容原接口名称）"""
 
     def __init__(self):
