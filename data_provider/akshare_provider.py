@@ -86,7 +86,6 @@ class AkShareProvider:
                 ts_code=ts_code,
                 start_date=today,
                 end_date=today,
-                adj="hfq",
             )
 
             if df is None or df.empty:
@@ -159,7 +158,6 @@ class AkShareProvider:
                 start_date=start_str,
                 end_date=end_str,
                 freq="D",
-                adj="hfq",
             )
 
             if df is None or df.empty:
