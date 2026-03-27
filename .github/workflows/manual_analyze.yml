@@ -56,7 +56,7 @@ jobs:
         run: |
           cat > .env << EOF
           LLM_BASE_URL=${{ secrets.LLM_BASE_URL || 'https://api.minimax.chat/v1' }}
-          LLM_API_KEY=${{ github.event.inputs.use_llm == 'true' && secrets.LLM_API_KEY || '' }}
+          LLM_API_KEY=${{ github.event.inputs.use_llm && secrets.LLM_API_KEY || '' }}
           LLM_MODEL=${{ secrets.LLM_MODEL || 'MiniMax-Text-01' }}
           MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }}
           ETF_LIST=${{ github.event.inputs.etf_codes }}
@@ -78,7 +78,7 @@ jobs:
           SMTP_PASS=${{ secrets.SMTP_PASS }}
           SMTP_TO=${{ secrets.SMTP_TO }}
           REPORT_DIR=reports
-          EOF
+          EOF          
 
       - name: 🔍 执行分析
         run: |
@@ -90,7 +90,7 @@ jobs:
           echo ""
           python main.py analyze \
             --codes ${{ github.event.inputs.etf_codes }} \
-            --output ${{ github.event.inputs.output_mode }}
+            --output ${{ github.event.inputs.output_mode }}          
         env:
           PYTHONPATH: ${{ github.workspace }}
 
@@ -104,7 +104,7 @@ jobs:
           latest=$(ls -t reports/etf_analysis_*.md 2>/dev/null | head -1)
           if [ -n "$latest" ]; then
             head -100 "$latest"
-          fi
+          fi          
 
       - name: 📤 上传报告
         uses: actions/upload-artifact@v4
