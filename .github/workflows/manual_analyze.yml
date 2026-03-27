@@ -85,8 +85,7 @@ jobs:
           echo "ETF列表: ${{ github.event.inputs.etf_codes }}"
           echo "输出方式: ${{ github.event.inputs.output_mode }}"
           echo ""
-          # 把逗号分隔的代码转成空格分隔，传给 --codes
-          python main.py analyze --output ${{ github.event.inputs.output_mode }} $(echo "${{ github.event.inputs.etf_codes }}" | tr ',' ' ')
+          python main.py analyze --output ${{ github.event.inputs.output_mode }} --codes $(echo "${{ github.event.inputs.etf_codes }}" | tr ',' ' ')
         env:
           PYTHONPATH: ${{ github.workspace }}
 
