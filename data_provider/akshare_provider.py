@@ -70,7 +70,8 @@ class AkShareProvider:
         today = datetime.now().strftime("%Y%m%d")
 
         try:
-            df = ts.daily(ts_code=ts_code, start_date=today, end_date=today)
+            t_k_data(ts_code=ts_code.replace(".SH", "").replace(".SZ", ""), 
+                    start=today, end=today, autype="qfq")
             if df is None or df.empty:
                 yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
                 df = ts.daily(ts_code=ts_code, start_date=yesterday, end_date=yesterday)
