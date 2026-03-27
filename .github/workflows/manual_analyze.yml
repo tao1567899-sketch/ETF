@@ -88,8 +88,8 @@ jobs:
           echo "LLM分析: ${{ github.event.inputs.use_llm }}"
           echo "推送级别: ${{ github.event.inputs.notify_level }}"
           echo ""
-          python main.py analyze \
-            --codes ${{ github.event.inputs.etf_codes }} \
+          ETF_CODES="${{ github.event.inputs.etf_codes }}"
+          python main.py analyze --codes ${ETF_CODES//,/ }
             --output ${{ github.event.inputs.output_mode }}          
         env:
           PYTHONPATH: ${{ github.workspace }}
