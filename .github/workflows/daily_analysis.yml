@@ -57,7 +57,9 @@ jobs:
           LLM_MODEL=${{ secrets.LLM_MODEL || 'MiniMax-Text-01' }}
           LLM_MAX_TOKENS=2048
           MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }}
-          ETF_LIST=${{ github.event.inputs.etf_codes || secrets.ETF_LIST || '510050,510300,510500,588000,512930,512480,510880,512890,518880,512400,159915,512880' }}
+          ETF_LIST=${{ github.event.inputs.etf_codes || secrets.ETF_LIST || '510050' }}
+          TUSHARE_TOKEN=${{ secrets.TUSHARE_TOKEN }}
+          TUSHARE_PROXY=${{ secrets.TUSHARE_PROXY }}
           NOTIFY_CHANNELS=${{ secrets.NOTIFY_CHANNELS }}
           NOTIFY_LEVEL=${{ secrets.NOTIFY_LEVEL || 'all' }}
           WECOM_WEBHOOK=${{ secrets.WECOM_WEBHOOK }}
