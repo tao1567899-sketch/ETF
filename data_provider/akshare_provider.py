@@ -6,12 +6,30 @@ AkShare 数据提供者
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 
 from src.logger import logger
+
+
+def _with_retry(func, *args, retries=3, delay=5, **kwargs):
+    """带重试的封装，适用于易超时的网络请求"""
+    last_err = None
+    for i in range(retries):
+        try:
+            result = func(*args, **kwargs)
+            if result is not None:
+                return result
+        except Exception as e:
+            last_err = e
+            logger.warning(f"第 {i+1}/{retries} 次获取失败: {e}")
+        if i < retries - 1:
+            time.sleep(delay * (i + 1))  # 递增等待
+    logger.error(f"重试 {retries} 次后仍失败: {last_err}")
+    return None
 
 
 class AkShareProvider:
@@ -23,13 +41,17 @@ class AkShareProvider:
     def _get_ak(self):
         if self._ak is None:
             import akshare as ak
+            # 设置全局超时（全局生效）
+            ak.http_cache = False
             self._ak = ak
         return self._ak
 
     async def get_realtime_quote(self, code: str) -> Optional[dict]:
         """获取ETF实时行情"""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._fetch_realtime_quote, code)
+        return await loop.run_in_executor(
+            None, _with_retry, self._fetch_realtime_quote, code, 3, 5
+        )
 
     def _fetch_realtime_quote(self, code: str) -> Optional[dict]:
         ak = self._get_ak()
@@ -38,12 +60,20 @@ class AkShareProvider:
             market = "sh" if code.startswith(("5", "11")) else "sz"
             symbol = f"{market}{code}"
 
-            df = ak.stock_zh_a_spot_em()
-            row = df[df["代码"] == code]
+            # 优先：从全A股行情中筛选（数据更全）
+            try:
+                df = ak.stock_zh_a_spot_em()
+                row = df[df["代码"] == code]
+            except Exception:
+                row = pd.DataFrame()
+
             if row.empty:
-                # 备用：直接查ETF行情
-                df2 = ak.fund_etf_spot_em()
-                row = df2[df2["代码"] == code]
+                # 备用：直接查ETF实时行情
+                try:
+                    df2 = ak.fund_etf_spot_em()
+                    row = df2[df2["代码"] == code]
+                except Exception:
+                    row = pd.DataFrame()
 
             if row.empty:
                 logger.warning(f"未找到ETF {code} 的实时行情")
@@ -80,7 +110,7 @@ class AkShareProvider:
         """获取ETF历史K线数据"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, self._fetch_history, code, period, days
+            None, _with_retry, self._fetch_history, code, period, days, 3, 5
         )
 
     def _fetch_history(
@@ -94,23 +124,29 @@ class AkShareProvider:
             )
 
             # 使用 ETF 专用接口
-            df = ak.fund_etf_hist_em(
-                symbol=code,
-                period=period,
-                start_date=start_date,
-                end_date=end_date,
-                adjust="hfq",  # 后复权
-            )
-
-            if df is None or df.empty:
-                # 备用：股票历史接口
-                df = ak.stock_zh_a_hist(
+            try:
+                df = ak.fund_etf_hist_em(
                     symbol=code,
                     period=period,
                     start_date=start_date,
                     end_date=end_date,
-                    adjust="hfq",
+                    adjust="hfq",  # 后复权
                 )
+            except Exception:
+                df = None
+
+            if df is None or df.empty:
+                # 备用：股票历史接口
+                try:
+                    df = ak.stock_zh_a_hist(
+                        symbol=code,
+                        period=period,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust="hfq",
+                    )
+                except Exception:
+                    df = None
 
             if df is None or df.empty:
                 logger.warning(f"未获取到 {code} 历史数据")
@@ -171,7 +207,9 @@ class AkShareProvider:
     async def get_market_overview(self) -> dict:
         """获取大盘概览（主要宽基指数）"""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._fetch_market_overview)
+        return await loop.run_in_executor(
+            None, _with_retry, self._fetch_market_overview, 3, 5
+        )
 
     def _fetch_market_overview(self) -> dict:
         ak = self._get_ak()
