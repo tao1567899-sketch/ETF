@@ -113,17 +113,19 @@ class ETFAnalyzer:
         except Exception as e:
             logger.debug(f"{code} 净值获取失败: {e}")
 
-        # 4. LLM 智能分析
+        # 4. LLM 智能分析（只有拿到行情数据才调用）
         try:
-            if self.llm_analyzer.is_available():
-                # 获取大盘概览
+            if self.llm_analyzer.is_available() and result.price > 0:
                 market_overview = await self.data_provider.get_market_overview()
-
                 etf_data_for_llm = result.to_dict()
                 etf_data_for_llm["market_overview"] = market_overview
                 etf_data_for_llm["registry_info"] = registry_info
-
                 result.llm_analysis = await self.llm_analyzer.analyze(etf_data_for_llm)
+            else:
+                if result.price <= 0:
+                    logger.info(f"{code} 行情数据为空，跳过LLM分析")
+                else:
+                    logger.info(f"{code} LLM未配置，跳过AI分析")
         except Exception as e:
             logger.warning(f"{code} LLM分析失败: {e}")
 
