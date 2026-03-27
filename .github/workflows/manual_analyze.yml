@@ -6,7 +6,7 @@ on:
       etf_codes:
         description: "ETF代码（逗号分隔，必填）"
         required: true
-        default: "510050,510300,510500,588000,512930,512480,510880,512890,518880,512400,159915,512880"
+        default: "510050,510300"
       output_mode:
         description: "输出方式（file=仅保存报告 / notify=仅推送 / all=保存+推送）"
         required: true
@@ -60,6 +60,8 @@ jobs:
           LLM_MODEL=${{ secrets.LLM_MODEL || 'MiniMax-Text-01' }}
           MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }}
           ETF_LIST=${{ github.event.inputs.etf_codes }}
+          TUSHARE_TOKEN=${{ secrets.TUSHARE_TOKEN }}
+          TUSHARE_PROXY=${{ secrets.TUSHARE_PROXY }}
           NOTIFY_CHANNELS=${{ secrets.NOTIFY_CHANNELS }}
           NOTIFY_LEVEL=${{ github.event.inputs.notify_level || 'all' }}
           WECOM_WEBHOOK=${{ secrets.WECOM_WEBHOOK }}
