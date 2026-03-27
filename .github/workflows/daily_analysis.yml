@@ -1,0 +1,123 @@
+name: 📊 每日ETF智能分析
+
+on:
+  # 定时触发：北京时间 周一至周五 16:15（A股收盘15分钟后）
+  # GitHub Actions 使用 UTC 时间，北京时间 = UTC+8，所以 16:15 CST = 08:15 UTC
+  schedule:
+    - cron: "15 8 * * 1-5"
+
+  # 允许手动触发（方便调试）
+  workflow_dispatch:
+    inputs:
+      etf_codes:
+        description: "ETF代码（逗号分隔，留空使用默认列表）"
+        required: false
+        default: ""
+      notify:
+        description: "是否发送推送通知"
+        type: boolean
+        required: false
+        default: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  TZ: "Asia/Shanghai"
+
+jobs:
+  analyze:
+    name: 分析ETF并生成报告
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. 检出代码 ────────────────────────────────────────────────────────
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      # ── 2. 设置 Python ─────────────────────────────────────────────────────
+      - name: 🐍 设置 Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      # ── 3. 安装依赖 ────────────────────────────────────────────────────────
+      - name: 📦 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 4. 准备配置 ────────────────────────────────────────────────────────
+      - name: ⚙️ 准备运行配置
+        run: |
+          # 从 Secrets 写入 .env 文件
+          cat > .env << EOF
+          LLM_BASE_URL=${{ secrets.LLM_BASE_URL || 'https://api.minimax.chat/v1' }}
+          LLM_API_KEY=${{ secrets.LLM_API_KEY }}
+          LLM_MODEL=${{ secrets.LLM_MODEL || 'MiniMax-Text-01' }}
+          LLM_MAX_TOKENS=2048
+          MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }}
+          ETF_LIST=${{ github.event.inputs.etf_codes || secrets.ETF_LIST || '510050,510300,510500,588000,512930,512480,510880,512890,518880,512400,159915,512880' }}
+          NOTIFY_CHANNELS=${{ secrets.NOTIFY_CHANNELS }}
+          NOTIFY_LEVEL=${{ secrets.NOTIFY_LEVEL || 'all' }}
+          WECOM_WEBHOOK=${{ secrets.WECOM_WEBHOOK }}
+          DINGTALK_WEBHOOK=${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET=${{ secrets.DINGTALK_SECRET }}
+          FEISHU_WEBHOOK=${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET=${{ secrets.FEISHU_SECRET }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          PUSHPLUS_TOKEN=${{ secrets.PUSHPLUS_TOKEN }}
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASS=${{ secrets.SMTP_PASS }}
+          SMTP_TO=${{ secrets.SMTP_TO }}
+          REPORT_DIR=reports
+          EOF
+
+      # ── 5. 运行分析 ────────────────────────────────────────────────────────
+      - name: 🔍 执行ETF分析
+        run: |
+          NOTIFY_FLAG=""
+          if [ "${{ github.event.inputs.notify }}" != "false" ]; then
+            NOTIFY_FLAG="--output all"
+          else
+            NOTIFY_FLAG="--output file"
+          fi
+          python main.py analyze $NOTIFY_FLAG
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      # ── 6. 列出生成的报告 ──────────────────────────────────────────────────
+      - name: 📄 查看生成的报告
+        run: |
+          echo "=== 生成的报告文件 ==="
+          ls -lh reports/ || echo "reports目录为空"
+          echo ""
+          echo "=== 最新报告摘要（前100行）==="
+          latest=$(ls -t reports/etf_analysis_*.md 2>/dev/null | head -1)
+          if [ -n "$latest" ]; then
+            head -100 "$latest"
+          fi
+
+      # ── 7. 上传报告为 Artifact ────────────────────────────────────────────
+      - name: 📤 上传分析报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: etf-report-${{ github.run_id }}
+          path: reports/
+          retention-days: 30
+
+      # ── 8. 提交报告到仓库（可选，保留历史） ───────────────────────────────
+      - name: 💾 提交报告到仓库
+        if: ${{ secrets.GIT_COMMIT_REPORTS == 'true' }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Actions Bot"
+          git add reports/
+          git diff --staged --quiet || git commit -m "📊 自动更新ETF分析报告 $(date '+%Y-%m-%d %H:%M')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

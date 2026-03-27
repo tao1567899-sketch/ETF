@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  # Web 仪表盘服务
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: etf_web
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./reports:/app/reports
+    command: python main.py server
+    restart: unless-stopped
+
+  # 定时任务服务（可选，与 GitHub Actions 二选一）
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: etf_scheduler
+    env_file:
+      - .env
+    volumes:
+      - ./reports:/app/reports
+    command: python main.py schedule
+    restart: unless-stopped
+    profiles:
+      - scheduler  # 默认不启动，用 docker compose --profile scheduler up 启用

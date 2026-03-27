@@ -1,0 +1,113 @@
+name: 🔍 手动分析ETF
+
+on:
+  workflow_dispatch:
+    inputs:
+      etf_codes:
+        description: "ETF代码（逗号分隔，必填）"
+        required: true
+        default: "510050,510300,510500,588000,512930,512480,510880,512890,518880,512400,159915,512880"
+      output_mode:
+        description: "输出方式"
+        required: true
+        type: choice
+        options:
+          - file        # 仅保存报告文件
+          - notify      # 仅推送通知
+          - all         # 保存 + 推送
+        default: "all"
+      use_llm:
+        description: "是否启用LLM智能分析（需配置API Key）"
+        type: boolean
+        default: true
+      notify_level:
+        description: "推送级别"
+        required: false
+        type: choice
+        options:
+          - all         # 全部推送
+          - strong      # 仅强信号推送
+        default: "all"
+
+env:
+  PYTHON_VERSION: "3.11"
+  TZ: "Asia/Shanghai"
+
+jobs:
+  manual-analyze:
+    name: 手动分析 ${{ github.event.inputs.etf_codes }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: 📦 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: ⚙️ 准备配置
+        run: |
+          cat > .env << EOF
+          LLM_BASE_URL=${{ secrets.LLM_BASE_URL || 'https://api.minimax.chat/v1' }}
+          LLM_API_KEY=${{ github.event.inputs.use_llm == 'true' && secrets.LLM_API_KEY || '' }}
+          LLM_MODEL=${{ secrets.LLM_MODEL || 'MiniMax-Text-01' }}
+          MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }}
+          ETF_LIST=${{ github.event.inputs.etf_codes }}
+          NOTIFY_CHANNELS=${{ secrets.NOTIFY_CHANNELS }}
+          NOTIFY_LEVEL=${{ github.event.inputs.notify_level || 'all' }}
+          WECOM_WEBHOOK=${{ secrets.WECOM_WEBHOOK }}
+          DINGTALK_WEBHOOK=${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET=${{ secrets.DINGTALK_SECRET }}
+          FEISHU_WEBHOOK=${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET=${{ secrets.FEISHU_SECRET }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          PUSHPLUS_TOKEN=${{ secrets.PUSHPLUS_TOKEN }}
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASS=${{ secrets.SMTP_PASS }}
+          SMTP_TO=${{ secrets.SMTP_TO }}
+          REPORT_DIR=reports
+          EOF
+
+      - name: 🔍 执行分析
+        run: |
+          echo "=== 手动分析 ETF ==="
+          echo "ETF列表: ${{ github.event.inputs.etf_codes }}"
+          echo "输出方式: ${{ github.event.inputs.output_mode }}"
+          echo "LLM分析: ${{ github.event.inputs.use_llm }}"
+          echo "推送级别: ${{ github.event.inputs.notify_level }}"
+          echo ""
+          python main.py analyze \
+            --codes ${{ github.event.inputs.etf_codes }} \
+            --output ${{ github.event.inputs.output_mode }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: 📄 查看生成的报告
+        if: always()
+        run: |
+          echo "=== 生成的报告文件 ==="
+          ls -lh reports/ || echo "reports目录为空"
+          echo ""
+          echo "=== 最新报告摘要（前100行）==="
+          latest=$(ls -t reports/etf_analysis_*.md 2>/dev/null | head -1)
+          if [ -n "$latest" ]; then
+            head -100 "$latest"
+          fi
+
+      - name: 📤 上传报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manual-etf-report-${{ github.run_id }}
+          path: reports/
+          retention-days: 7
