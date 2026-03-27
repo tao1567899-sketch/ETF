@@ -214,29 +214,22 @@ class FeishuNotifier:
     async def send(self, text: str, markdown: str = "") -> bool:
         if not config.feishu_webhook:
             return False
-        content = markdown if markdown else text
+        # 飞书 text 类型不支持 Markdown，只发纯文本摘要
+        content = text if text else markdown[:500]
         try:
             headers = {"Content-Type": "application/json"}
             webhook = config.feishu_webhook
-            if config.feishu_secret:
-                ts = str(int(time.time()))
-                string_to_sign = f"{ts}\n{config.feishu_secret}"
-                hmac_code = hmac.new(
-                    string_to_sign.encode("utf-8"), b"",
-                    digestmod=hashlib.sha256,
-                ).digest()
-                sign = base64.b64encode(hmac_code).decode("utf-8")
-            else:
-                ts, sign = None, None
-
-            if len(content) > 500:
-                return await self._send_long(webhook, headers, ts, sign, content)
-            else:
-                payload = self._payload(content, ts, sign)
-                return await self._post(webhook, headers, payload)
+            payload = {"msg_type": "text", "content": {"text": content}}
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(webhook, headers=headers, json=payload)
+                data = resp.json()
+                if data.get("code") == 0 or data.get("StatusCode") == 0:
+                    logger.info("飞书推送成功")
+                    return True
+                logger.warning(f"飞书推送失败: {data}")
         except Exception as e:
             logger.error(f"飞书推送异常: {e}")
-            return False
+        return False
 
     def _payload(self, content: str, ts, sign):
         p = {"msg_type": "text", "content": {"text": content}}
