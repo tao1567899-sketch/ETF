@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional
 
-from data_provider.akshare_provider import TushareProvider
+from data_provider.Tushare_provider import TushareProvider
 from data_provider.etf_registry import get_etf_info
 from src.config import config
 from src.logger import logger
