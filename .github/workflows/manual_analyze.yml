@@ -8,25 +8,25 @@ on:
         required: true
         default: "510050,510300,510500,588000,512930,512480,510880,512890,518880,512400,159915,512880"
       output_mode:
-        description: "输出方式"
+        description: "输出方式（file=仅保存报告 / notify=仅推送 / all=保存+推送）"
         required: true
         type: choice
         options:
-          - file        # 仅保存报告文件
-          - notify      # 仅推送通知
-          - all         # 保存 + 推送
+          - all
+          - file
+          - notify
         default: "all"
       use_llm:
         description: "是否启用LLM智能分析（需配置API Key）"
         type: boolean
         default: true
       notify_level:
-        description: "推送级别"
+        description: "推送级别（all=全部推送 / strong=仅强信号推送）"
         required: false
         type: choice
         options:
-          - all         # 全部推送
-          - strong      # 仅强信号推送
+          - all
+          - strong
         default: "all"
 
 env:
