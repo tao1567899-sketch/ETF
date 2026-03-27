@@ -112,12 +112,13 @@ jobs:
 
       # ── 8. 提交报告到仓库（可选，保留历史） ───────────────────────────────
       - name: 💾 提交报告到仓库
-        if: ${{ secrets.GIT_COMMIT_REPORTS == 'true' }}
+        if: env.GIT_COMMIT_REPORTS == 'true'
+        env:
+          GIT_COMMIT_REPORTS: ${{ secrets.GIT_COMMIT_REPORTS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions Bot"
           git add reports/
           git diff --staged --quiet || git commit -m "📊 自动更新ETF分析报告 $(date '+%Y-%m-%d %H:%M')"
           git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
