@@ -16,7 +16,15 @@ from src.logger import logger
 
 
 def _with_retry(func, *args, retries=3, delay=5, **kwargs):
-    """带重试的封装，适用于易超时的网络请求"""
+    """带重试的封装，适用于易超时的网络请求
+
+    Args:
+        func: 要执行的函数
+        *args: 传递给 func 的位置参数
+        retries: 重试次数（默认3）
+        delay: 基础等待秒数（默认5），每次重试递增
+        **kwargs: 传递给 func 的关键字参数
+    """
     last_err = None
     for i in range(retries):
         try:
@@ -27,7 +35,7 @@ def _with_retry(func, *args, retries=3, delay=5, **kwargs):
             last_err = e
             logger.warning(f"第 {i+1}/{retries} 次获取失败: {e}")
         if i < retries - 1:
-            time.sleep(delay * (i + 1))  # 递增等待
+            time.sleep(delay * (i + 1))
     logger.error(f"重试 {retries} 次后仍失败: {last_err}")
     return None
 
@@ -41,7 +49,6 @@ class AkShareProvider:
     def _get_ak(self):
         if self._ak is None:
             import akshare as ak
-            # 设置全局超时（全局生效）
             ak.http_cache = False
             self._ak = ak
         return self._ak
@@ -50,17 +57,15 @@ class AkShareProvider:
         """获取ETF实时行情"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, _with_retry, self._fetch_realtime_quote, code, 3, 5
+            None,
+            lambda: _with_retry(
+                self._fetch_realtime_quote, code, retries=3, delay=5
+            ),
         )
 
     def _fetch_realtime_quote(self, code: str) -> Optional[dict]:
         ak = self._get_ak()
         try:
-            # 判断交易所前缀
-            market = "sh" if code.startswith(("5", "11")) else "sz"
-            symbol = f"{market}{code}"
-
-            # 优先：从全A股行情中筛选（数据更全）
             try:
                 df = ak.stock_zh_a_spot_em()
                 row = df[df["代码"] == code]
@@ -68,7 +73,6 @@ class AkShareProvider:
                 row = pd.DataFrame()
 
             if row.empty:
-                # 备用：直接查ETF实时行情
                 try:
                     df2 = ak.fund_etf_spot_em()
                     row = df2[df2["代码"] == code]
@@ -110,7 +114,10 @@ class AkShareProvider:
         """获取ETF历史K线数据"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, _with_retry, self._fetch_history, code, period, days, 3, 5
+            None,
+            lambda: _with_retry(
+                self._fetch_history, code, period, days, retries=3, delay=5
+            ),
         )
 
     def _fetch_history(
@@ -123,20 +130,18 @@ class AkShareProvider:
                 "%Y%m%d"
             )
 
-            # 使用 ETF 专用接口
             try:
                 df = ak.fund_etf_hist_em(
                     symbol=code,
                     period=period,
                     start_date=start_date,
                     end_date=end_date,
-                    adjust="hfq",  # 后复权
+                    adjust="hfq",
                 )
             except Exception:
                 df = None
 
             if df is None or df.empty:
-                # 备用：股票历史接口
                 try:
                     df = ak.stock_zh_a_hist(
                         symbol=code,
@@ -152,30 +157,19 @@ class AkShareProvider:
                 logger.warning(f"未获取到 {code} 历史数据")
                 return None
 
-            # 标准化列名
             col_map = {
-                "日期": "date",
-                "开盘": "open",
-                "最高": "high",
-                "最低": "low",
-                "收盘": "close",
-                "成交量": "volume",
-                "成交额": "turnover",
-                "振幅": "amplitude",
-                "涨跌幅": "change_pct",
-                "涨跌额": "change_amt",
+                "日期": "date", "开盘": "open", "最高": "high", "最低": "low",
+                "收盘": "close", "成交量": "volume", "成交额": "turnover",
+                "振幅": "amplitude", "涨跌幅": "change_pct", "涨跌额": "change_amt",
                 "换手率": "turnover_rate",
             }
             df = df.rename(columns=col_map)
             df["date"] = pd.to_datetime(df["date"])
             df = df.sort_values("date").tail(days)
             df = df.reset_index(drop=True)
-
-            # 确保数值列
             for col in ["open", "high", "low", "close", "volume", "turnover"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-
             return df
 
         except Exception as e:
@@ -183,7 +177,6 @@ class AkShareProvider:
             return None
 
     async def get_etf_nav(self, code: str) -> Optional[dict]:
-        """获取ETF净值（NAV）和折溢价数据"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._fetch_etf_nav, code)
 
@@ -193,31 +186,25 @@ class AkShareProvider:
             df = ak.fund_open_fund_info_em(fund=code, indicator="单位净值走势")
             if df is None or df.empty:
                 return None
-
             latest = df.iloc[-1]
             nav = float(latest.get("单位净值", 0))
-            return {
-                "nav": nav,
-                "nav_date": str(latest.get("净值日期", "")),
-            }
+            return {"nav": nav, "nav_date": str(latest.get("净值日期", ""))}
         except Exception as e:
             logger.debug(f"获取 {code} 净值失败（非开放式基金）: {e}")
             return None
 
     async def get_market_overview(self) -> dict:
-        """获取大盘概览（主要宽基指数）"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, _with_retry, self._fetch_market_overview, 3, 5
+            None,
+            lambda: _with_retry(self._fetch_market_overview, retries=3, delay=5),
         )
 
     def _fetch_market_overview(self) -> dict:
         ak = self._get_ak()
         indices = {
-            "000001": "上证指数",
-            "399001": "深证成指",
-            "399006": "创业板指",
-            "000688": "科创50",
+            "000001": "上证指数", "399001": "深证成指",
+            "399006": "创业板指", "000688": "科创50",
         }
         result = {}
         try:
