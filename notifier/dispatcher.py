@@ -211,17 +211,18 @@ class DingTalkNotifier:
 
 
 class FeishuNotifier:
-    async def send(self, text: str, markdown: str = "") -> bool:
+     async def send(self, text: str, markdown: str = "") -> bool:
         if not config.feishu_webhook:
             return False
-        # 飞书 text 类型不支持 Markdown，只发纯文本摘要
-        content = text if text else markdown[:500]
         try:
-            headers = {"Content-Type": "application/json"}
-            webhook = config.feishu_webhook
+            content = text[:500] if text else (markdown or "")[:500]
             payload = {"msg_type": "text", "content": {"text": content}}
             async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(webhook, headers=headers, json=payload)
+                resp = await client.post(
+                    config.feishu_webhook,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                )
                 data = resp.json()
                 if data.get("code") == 0 or data.get("StatusCode") == 0:
                     logger.info("飞书推送成功")
