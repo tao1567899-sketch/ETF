@@ -17,7 +17,6 @@ import httpx
 from src.logger import logger
 
 
-# 全局并发锁，避免触发限流
 _semaphore = asyncio.Semaphore(1)
 
 
@@ -77,19 +76,17 @@ class AkShareProvider:
                     logger.warning(f"API {api_name} 返回错误: {data.get('msg')}")
                     return None
                 api_data = data.get("data")
-                if not api_data or not api_data.get("items"):
+                if not api_data:
                     return None
                 return api_data
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
-                    logger.warning(f"API {api_name} 限流，等待15秒后重试...")
+                    logger.warning(f"API {api_name} 限流，等待15秒...")
                     await asyncio.sleep(15)
                     resp = await client.post(url, json=payload)
                     resp.raise_for_status()
                     data = resp.json()
                     api_data = data.get("data")
-                    if not api_data or not api_data.get("items"):
-                        return None
                     return api_data
                 logger.error(f"API {api_name} HTTP错误: {e}")
                 return None
@@ -97,37 +94,38 @@ class AkShareProvider:
                 logger.error(f"API {api_name} 调用失败: {e}")
                 return None
             finally:
-                await asyncio.sleep(2)  # 每次请求间隔2秒，避免限流
+                await asyncio.sleep(2)
 
     async def get_realtime_quote(self, code: str) -> Optional[dict]:
-        today = datetime.now().strftime("%Y%m%d")
         return await _with_retry(
-            self._fetch_realtime, code=code, today=today, retries=3, delay=5
+            self._fetch_realtime, code=code, retries=3, delay=5
         )
 
-    async def _fetch_realtime(self, code: str, today: str) -> Optional[dict]:
+    async def _fetch_realtime(self, code: str) -> Optional[dict]:
         ts_code = self._code(code)
-        data = await self._call("daily", {
+
+        # 先尝试最近交易日
+        trade_date = self._latest_trade_date()
+        data = await self._call("fund_daily", {
             "ts_code": ts_code,
-            "start_date": today,
-            "end_date": today,
+            "start_date": trade_date,
+            "end_date": trade_date,
         })
-        if not data:
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-            data = await self._call("daily", {
-                "ts_code": ts_code,
-                "start_date": yesterday,
-                "end_date": yesterday,
-            })
-        if not data:
+
+        if not data or not data.get("items"):
             logger.warning(f"[{code}] 未找到行情")
             return None
+
         fields = data.get("fields", [])
         r = dict(zip(fields, data["items"][0]))
         close = float(r.get("close", 0))
         pre = float(r.get("pre_close", close))
         chg = float(r.get("change", 0)) if r.get("change") is not None else (close - pre)
         pct = float(r.get("pct_chg", 0)) if r.get("pct_chg") is not None else 0.0
+        # vol 单位是"手"（1手=100股），转为股；amount 单位是"万元"，转为元
+        vol = r.get("vol", 0)
+        amount = r.get("amount", 0)
+
         return {
             "code": code,
             "name": str(r.get("name", f"ETF-{code}")),
@@ -136,15 +134,35 @@ class AkShareProvider:
             "high": float(r.get("high", close)),
             "low": float(r.get("low", close)),
             "prev_close": pre,
-            "volume": float(r.get("vol", 0) or 0) * 100,
-            "turnover": float(r.get("amount", 0) or 0) * 10000,
+            "volume": float(vol or 0) * 100,       # 手 → 股
+            "turnover": float(amount or 0) * 10000,  # 万元 → 元
             "change_pct": pct,
             "change_amt": chg,
             "amplitude": 0.0,
-            "turnover_rate": float(r.get("turnover_rate", 0) or 0),
+            "turnover_rate": 0.0,
             "pe_ratio": None,
             "timestamp": datetime.now().isoformat(),
         }
+
+    def _latest_trade_date(self) -> str:
+        """获取最近交易日（同步请求）"""
+        try:
+            today = datetime.now()
+            start = (today - timedelta(days=10)).strftime("%Y%m%d")
+            end = today.strftime("%Y%m%d")
+            # 同步调用获取交易日历
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            data = loop.run_until_complete(self._call("trade_cal", {
+                "start_date": start, "end_date": end, "is_open": "1"
+            }))
+            loop.close()
+            if data and data.get("items"):
+                dates = [item[1] for item in data["items"]]
+                return dates[-1]  # 最近的可交易日
+        except Exception as e:
+            logger.warning(f"获取交易日历失败: {e}")
+        return datetime.now().strftime("%Y%m%d")
 
     async def get_history(self, code: str, period: str = "daily", days: int = 120) -> Optional[pd.DataFrame]:
         return await _with_retry(
@@ -155,12 +173,12 @@ class AkShareProvider:
         ts_code = self._code(code)
         end = datetime.now()
         start = end - timedelta(days=days + 30)
-        data = await self._call("daily", {
+        data = await self._call("fund_daily", {
             "ts_code": ts_code,
             "start_date": start.strftime("%Y%m%d"),
             "end_date": end.strftime("%Y%m%d"),
         })
-        if not data:
+        if not data or not data.get("items"):
             logger.warning(f"[{code}] 无历史数据")
             return None
         df = pd.DataFrame(data["items"], columns=data["fields"])
@@ -170,9 +188,14 @@ class AkShareProvider:
             "amount": "turnover",
             "pct_chg": "change_pct",
         })
+        # vol: 手→股；amount: 万元→元
+        if "volume" in df.columns:
+            df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100
+        if "turnover" in df.columns:
+            df["turnover"] = pd.to_numeric(df["turnover"], errors="coerce") * 10000
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df = df.dropna(subset=["date"]).sort_values("date").tail(days).reset_index(drop=True)
-        for col in ["open", "high", "low", "close", "volume", "turnover"]:
+        for col in ["open", "high", "low", "close"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         logger.info(f"[{code}] 历史数据 {len(df)} 条")
@@ -183,16 +206,19 @@ class AkShareProvider:
 
     async def _fetch_nav(self, code: str) -> Optional[dict]:
         data = await self._call("fund_nav", {"ts_code": self._code(code)})
-        if not data:
+        if not data or not data.get("items"):
             return None
         r = dict(zip(data["fields"], data["items"][-1]))
-        return {"nav": float(r.get("NAV", 0)), "nav_date": str(r.get("trade_date", ""))}
+        return {
+            "nav": float(r.get("NAV", 0)),
+            "nav_date": str(r.get("trade_date", "")),
+        }
 
     async def get_market_overview(self) -> dict:
         return await _with_retry(self._fetch_overview, retries=2, delay=3)
 
     async def _fetch_overview(self) -> dict:
-        today = datetime.now().strftime("%Y%m%d")
+        trade_date = self._latest_trade_date()
         indices = {
             "000001.SH": "上证指数",
             "399001.SZ": "深证成指",
@@ -202,10 +228,10 @@ class AkShareProvider:
         result = {}
         data = await self._call("daily", {
             "ts_code": ",".join(indices.keys()),
-            "start_date": today,
-            "end_date": today,
+            "start_date": trade_date,
+            "end_date": trade_date,
         })
-        if not data:
+        if not data or not data.get("items"):
             return result
         df = pd.DataFrame(data["items"], columns=data["fields"])
         for ts_code, name in indices.items():
