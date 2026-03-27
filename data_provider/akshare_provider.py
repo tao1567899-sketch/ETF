@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-import json
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -16,6 +15,10 @@ import pandas as pd
 import httpx
 
 from src.logger import logger
+
+
+# 全局并发锁，避免触发限流
+_semaphore = asyncio.Semaphore(1)
 
 
 def _with_retry(func, retries=3, delay=5, **kwargs):
@@ -56,35 +59,67 @@ class AkShareProvider:
             return f"{code}.SH"
         return f"{code}.SZ"
 
-    def _url(self, api_name: str) -> str:
-        return f"{self._proxy}/{api_name}"
-
     async def _call(self, api_name: str, params: dict) -> Optional[dict]:
-        client = self._get_client()
-        payload = {"api_name": api_name, "token": self._token, "params": params, "fields": ""}
-        try:
-            resp = await client.post(self._url(api_name), json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("code") != 0:
-                logger.warning(f"API {api_name} 错误: {data.get('msg')}")
+        async with _semaphore:
+            client = self._get_client()
+            url = f"{self._proxy}/{api_name}"
+            payload = {
+                "api_name": api_name,
+                "token": self._token,
+                "params": params,
+                "fields": "",
+            }
+            try:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.warning(f"API {api_name} 返回错误: {data.get('msg')}")
+                    return None
+                api_data = data.get("data")
+                if not api_data or not api_data.get("items"):
+                    return None
+                return api_data
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    logger.warning(f"API {api_name} 限流，等待15秒后重试...")
+                    await asyncio.sleep(15)
+                    resp = await client.post(url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    api_data = data.get("data")
+                    if not api_data or not api_data.get("items"):
+                        return None
+                    return api_data
+                logger.error(f"API {api_name} HTTP错误: {e}")
                 return None
-            return data.get("data")
-        except Exception as e:
-            logger.error(f"API {api_name} 调用失败: {e}")
-            return None
+            except Exception as e:
+                logger.error(f"API {api_name} 调用失败: {e}")
+                return None
+            finally:
+                await asyncio.sleep(2)  # 每次请求间隔2秒，避免限流
 
     async def get_realtime_quote(self, code: str) -> Optional[dict]:
         today = datetime.now().strftime("%Y%m%d")
-        return await _with_retry(self._fetch_realtime, code=code, today=today, retries=3, delay=5)
+        return await _with_retry(
+            self._fetch_realtime, code=code, today=today, retries=3, delay=5
+        )
 
     async def _fetch_realtime(self, code: str, today: str) -> Optional[dict]:
         ts_code = self._code(code)
-        data = await self._call("daily", {"ts_code": ts_code, "start_date": today, "end_date": today})
-        if not data or not data.get("items"):
+        data = await self._call("daily", {
+            "ts_code": ts_code,
+            "start_date": today,
+            "end_date": today,
+        })
+        if not data:
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-            data = await self._call("daily", {"ts_code": ts_code, "start_date": yesterday, "end_date": yesterday})
-        if not data or not data.get("items"):
+            data = await self._call("daily", {
+                "ts_code": ts_code,
+                "start_date": yesterday,
+                "end_date": yesterday,
+            })
+        if not data:
             logger.warning(f"[{code}] 未找到行情")
             return None
         fields = data.get("fields", [])
@@ -112,7 +147,9 @@ class AkShareProvider:
         }
 
     async def get_history(self, code: str, period: str = "daily", days: int = 120) -> Optional[pd.DataFrame]:
-        return await _with_retry(self._fetch_history, code=code, period=period, days=days, retries=3, delay=5)
+        return await _with_retry(
+            self._fetch_history, code=code, period=period, days=days, retries=3, delay=5
+        )
 
     async def _fetch_history(self, code: str, period: str, days: int) -> Optional[pd.DataFrame]:
         ts_code = self._code(code)
@@ -123,11 +160,16 @@ class AkShareProvider:
             "start_date": start.strftime("%Y%m%d"),
             "end_date": end.strftime("%Y%m%d"),
         })
-        if not data or not data.get("items"):
+        if not data:
             logger.warning(f"[{code}] 无历史数据")
             return None
         df = pd.DataFrame(data["items"], columns=data["fields"])
-        df = df.rename(columns={"trade_date": "date", "vol": "volume", "amount": "turnover", "pct_chg": "change_pct"})
+        df = df.rename(columns={
+            "trade_date": "date",
+            "vol": "volume",
+            "amount": "turnover",
+            "pct_chg": "change_pct",
+        })
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df = df.dropna(subset=["date"]).sort_values("date").tail(days).reset_index(drop=True)
         for col in ["open", "high", "low", "close", "volume", "turnover"]:
@@ -141,7 +183,7 @@ class AkShareProvider:
 
     async def _fetch_nav(self, code: str) -> Optional[dict]:
         data = await self._call("fund_nav", {"ts_code": self._code(code)})
-        if not data or not data.get("items"):
+        if not data:
             return None
         r = dict(zip(data["fields"], data["items"][-1]))
         return {"nav": float(r.get("NAV", 0)), "nav_date": str(r.get("trade_date", ""))}
@@ -151,15 +193,27 @@ class AkShareProvider:
 
     async def _fetch_overview(self) -> dict:
         today = datetime.now().strftime("%Y%m%d")
-        indices = {"000001.SH": "上证指数", "399001.SZ": "深证成指", "399006.SZ": "创业板指", "000688.SH": "科创50"}
+        indices = {
+            "000001.SH": "上证指数",
+            "399001.SZ": "深证成指",
+            "399006.SZ": "创业板指",
+            "000688.SH": "科创50",
+        }
         result = {}
-        data = await self._call("daily", {"ts_code": ",".join(indices.keys()), "start_date": today, "end_date": today})
-        if not data or not data.get("items"):
+        data = await self._call("daily", {
+            "ts_code": ",".join(indices.keys()),
+            "start_date": today,
+            "end_date": today,
+        })
+        if not data:
             return result
         df = pd.DataFrame(data["items"], columns=data["fields"])
         for ts_code, name in indices.items():
             row = df[df["ts_code"] == ts_code]
             if not row.empty:
                 r = row.iloc[0]
-                result[name] = {"price": float(r.get("close", 0)), "change_pct": float(r.get("pct_chg", 0))}
+                result[name] = {
+                    "price": float(r.get("close", 0)),
+                    "change_pct": float(r.get("pct_chg", 0)),
+                }
         return result

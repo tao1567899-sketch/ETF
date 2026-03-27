@@ -5,12 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
-import time
-import base64
-import urllib.parse
-from typing import List, Optional, Callable, Any
+from typing import List, Callable, Any
 
 import httpx
 
@@ -35,7 +30,11 @@ def _build_summary_message(results: List[ETFAnalysisResult]) -> str:
     lines = [f"📊 国内ETF日报 {now}", f"共分析 {len(results)} 只ETF\n"]
     for r in results:
         sig = TechnicalAnalyzer.signal_to_emoji(r.overall_signal or "neutral")
-        lines.append(f"{sig} {r.name}({r.code}) {(r.change_pct or 0):+.2f}% 评分{(r.signal_score or 0):+.0f} [{r.overall_signal or 'neutral'}]")
+        lines.append(
+            f"{sig} {r.name}({r.code}) "
+            f"{(r.change_pct or 0):+.2f}% "
+            f"评分{(r.signal_score or 0):+.0f} [{r.overall_signal or 'neutral'}]"
+        )
     if results:
         top = max(results, key=lambda x: x.change_pct or 0)
         bot = min(results, key=lambda x: x.change_pct or 0)
@@ -51,23 +50,37 @@ def _build_markdown_message(results: List[ETFAnalysisResult]) -> str:
     lines += ["| 代码 | 名称 | 涨跌幅 | 评分 | 信号 |", "|------|------|--------|------|------|"]
     for r in results:
         sig = TechnicalAnalyzer.signal_to_emoji(r.overall_signal or "neutral")
-        lines.append(f"| {r.code} | {r.name} | {(r.change_pct or 0):+.2f}% | {(r.signal_score or 0):+.0f} | {sig} |")
+        lines.append(
+            f"| {r.code} | {r.name} | {(r.change_pct or 0):+.2f}% | "
+            f"{(r.signal_score or 0):+.0f} | {sig} |"
+        )
     lines.append("")
     for r in results:
         sig = TechnicalAnalyzer.signal_to_emoji(r.overall_signal or "neutral")
-        lines += ["---", f"## {sig} {r.name}（{r.code}）", f"> 跟踪指数：**{r.index or '未知'}** | 类型：{r.etf_type or '其他'}", ""]
-        lines += ["### 📈 今日行情",
+        lines += [
+            "---",
+            f"## {sig} {r.name}（{r.code}）",
+            f"> 跟踪指数：**{r.index or '未知'}** | 类型：{r.etf_type or '其他'}",
+            "",
+        ]
+        lines += [
+            "### 📈 今日行情",
             f"- 最新价：**{(r.price or 0):.4f}** 元",
             f"- 涨跌幅：{(r.change_pct or 0):+.2f}%",
             f"- 成交额：{(r.turnover or 0)/1e8:.2f} 亿",
-            f"- 换手率：{(r.turnover_rate or 0):.2f}%", ""]
-        lines += ["### 🔬 技术指标",
+            f"- 换手率：{(r.turnover_rate or 0):.2f}%",
+            "",
+        ]
+        lines += [
+            "### 🔬 技术指标",
             f"- MA5/10/20/60/120：{_f(r.ma5)}/{_f(r.ma10)}/{_f(r.ma20)}/{_f(r.ma60)}/{_f(r.ma120)}",
             f"- RSI(14)：{_f(r.rsi14)} [{r.rsi_signal or 'neutral'}]",
             f"- MACD：DIF={_f(r.macd)} DEA={_f(r.macd_signal_line)} 柱={_f(r.macd_hist)} [{r.macd_cross or 'none'}]",
             f"- KDJ：K={_f(r.kdj_k)} D={_f(r.kdj_d)} J={_f(r.kdj_j)} [{r.kdj_cross or 'none'}]",
             f"- 量比：{_f(r.volume_ratio)} [{r.volume_trend or 'normal'}]",
-            f"**综合信号**：{sig} {r.overall_signal or 'neutral'}（评分：{(r.signal_score or 0):+.1f}）", ""]
+            "",
+            f"**综合信号**：{sig} {r.overall_signal or 'neutral'}（评分：{(r.signal_score or 0):+.1f}）",
+        ]
         if r.signals:
             lines.append("")
             for s in r.signals:
@@ -77,7 +90,7 @@ def _build_markdown_message(results: List[ETFAnalysisResult]) -> str:
         else:
             lines += ["", "### 🤖 AI 智能分析", "_暂无AI分析内容_"]
         lines.append("")
-    lines += ["---", "_本分析由ETF智能分析系统自动生成，仅供参考，不构成投资建议。_"]
+    lines += ["---", "_本分析仅供参考，不构成投资建议。_"]
     return "\n".join(lines)
 
 
@@ -130,4 +143,6 @@ class NotifyDispatcher:
             tasks.append(_send_with_retry(self.feishu.send, text, md, channel_name="飞书"))
         if tasks:
             outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info(f"推送完成: {[o for o in outcomes if o]}")
+            success = [str(o) for o in outcomes if o]
+            failed = [str(o) for o in outcomes if not o]
+            logger.info(f"推送完成 — 成功: {success}, 失败: {failed}")
