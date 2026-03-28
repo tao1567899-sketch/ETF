@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Callable, Any
+from typing import List, Callable
 
 import httpx
 
@@ -107,12 +107,27 @@ async def _send_with_retry(send_func: Callable, *args, max_retries: int = 2, cha
 
 
 class FeishuNotifier:
+    """飞书推送，支持完整 Markdown 报告"""
+
     async def send(self, text: str, markdown: str = "") -> bool:
         if not config.feishu_webhook:
             return False
         try:
-            content = (text or markdown or "")[:500]
-            payload = {"msg_type": "text", "content": {"text": content}}
+            # 发送完整 Markdown 内容（优先）
+            if markdown and len(markdown) <= 4000:
+                return await self._send_markdown(markdown)
+            elif text:
+                return await self._send_text(text[:500])
+        except Exception as e:
+            logger.error(f"飞书推送异常: {e}")
+        return False
+
+    async def _send_text(self, content: str) -> bool:
+        payload = {
+            "msg_type": "text",
+            "content": {"text": content}
+        }
+        try:
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.post(
                     config.feishu_webhook,
@@ -126,6 +141,93 @@ class FeishuNotifier:
                 logger.warning(f"飞书推送失败: {data}")
         except Exception as e:
             logger.error(f"飞书推送异常: {e}")
+        return False
+
+    async def _send_markdown(self, md_content: str) -> bool:
+        """使用飞书 interactive card 发送完整 Markdown 报告"""
+        # 构建飞书消息卡片元素
+        md_lines = md_content.split("\n")
+        elements = []
+        current_paragraph = []
+        in_code_block = False
+
+        for line in md_lines:
+            # 跳过标题行（卡片标题单独处理）
+            if line.startswith("# ") and not in_code_block:
+                continue
+            if line.startswith("> ") and not in_code_block:
+                elements.append({"tag": "markdown", "content": line})
+                continue
+            if line.strip() == "---":
+                elements.append({"tag": "hr"})
+                continue
+            if line.startswith("## ") and not in_code_block:
+                elements.append({"tag": "markdown", "content": f"**{line[3:]}**"})
+                continue
+            if line.startswith("### ") and not in_code_block:
+                elements.append({"tag": "markdown", "content": f"**{line[4:]}**"})
+                continue
+            if line.startswith("| ") or line.startswith("|---"):
+                continue  # 表格行简化处理
+            if line.startswith("-"):
+                elements.append({"tag": "markdown", "content": line})
+                continue
+            if line.startswith("**") and not in_code_block:
+                elements.append({"tag": "markdown", "content": line})
+                continue
+            if line.startswith("**"):
+                elements.append({"tag": "markdown", "content": line})
+                continue
+            if line.startswith("-"):
+                elements.append({"tag": "markdown", "content": line})
+                continue
+            stripped = line.strip()
+            if stripped:
+                elements.append({"tag": "markdown", "content": stripped})
+
+        # 分块发送（飞书每条消息有长度限制）
+        chunks = self._split_elements(elements)
+        for i, chunk in enumerate(chunks):
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {"tag": "plain_text", "content": f"📊 ETF分析报告 ({i+1}/{len(chunks)})"},
+                        "template": "blue"
+                    },
+                    "elements": chunk
+                }
+            }
+            ok = await self._post_card(payload)
+            if not ok:
+                return False
+            if i < len(chunks) - 1:
+                await asyncio.sleep(1)
+
+        logger.info(f"飞书卡片推送完成，共 {len(chunks)} 张")
+        return True
+
+    def _split_elements(self, elements: list, chunk_size: int = 20) -> list:
+        """将 elements 分块，每块不超过 chunk_size 个元素"""
+        chunks = []
+        for i in range(0, len(elements), chunk_size):
+            chunks.append(elements[i:i+chunk_size])
+        return chunks if chunks else [[]]
+
+    async def _post_card(self, payload: dict) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    config.feishu_webhook,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                )
+                data = resp.json()
+                if data.get("code") == 0 or data.get("StatusCode") == 0:
+                    return True
+                logger.warning(f"飞书卡片推送失败: {data}")
+        except Exception as e:
+            logger.error(f"飞书卡片推送异常: {e}")
         return False
 
 
