@@ -6,6 +6,7 @@ TuShare HTTP 数据提供者
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -78,6 +79,9 @@ class AkShareProvider:
                 api_data = data.get("data")
                 if not api_data:
                     return None
+                # api_data 可能是 {'fields': [...], 'items': [...]} 或 None
+                if isinstance(api_data, dict) and not api_data.get("items"):
+                    return None
                 return api_data
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
@@ -145,24 +149,32 @@ class AkShareProvider:
         }
 
     def _latest_trade_date(self) -> str:
-        """获取最近交易日（同步请求）"""
+        """获取最近交易日（同步HTTP请求）"""
         try:
+            import urllib.request
+            import urllib.parse
             today = datetime.now()
             start = (today - timedelta(days=10)).strftime("%Y%m%d")
             end = today.strftime("%Y%m%d")
-            # 同步调用获取交易日历
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            data = loop.run_until_complete(self._call("trade_cal", {
-                "start_date": start, "end_date": end, "is_open": "1"
-            }))
-            loop.close()
-            if data and data.get("items"):
-                dates = [item[1] for item in data["items"]]
-                return dates[-1]  # 最近的可交易日
+            payload = json.dumps({
+                "api_name": "trade_cal",
+                "token": self._token,
+                "params": {"start_date": start, "end_date": end, "is_open": "1"},
+                "fields": ""
+            }).encode()
+            req = urllib.request.Request(
+                f"{self._proxy}/trade_cal",
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.load(resp)
+            if data.get("code") == 0 and data.get("data", {}).get("items"):
+                items = data["data"]["items"]
+                return items[-1][1]  # 最近的可交易日
         except Exception as e:
             logger.warning(f"获取交易日历失败: {e}")
-        return datetime.now().strftime("%Y%m%d")
+        return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
     async def get_history(self, code: str, period: str = "daily", days: int = 120) -> Optional[pd.DataFrame]:
         return await _with_retry(
